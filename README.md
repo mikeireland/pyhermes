@@ -3,6 +3,8 @@ pyhermes
 
 A python-based (no IRAF) data reduction tool for the HERMES instrument.
 
+As of November 2014, it has basic functionality only.
+
 Contributing
 ============
 
