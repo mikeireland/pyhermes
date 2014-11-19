@@ -2,15 +2,16 @@
 """
 
 #Example setup analysis for a full night: blue		
-#hm = HERMES('/Users/mireland/data/hermes/140310/data/ccd_1/', '/Users/mireland/tel/hermes/140310/ccd_1/', '/Users/mireland/python/hermes/cal/ccd_1/')
-#hm.go()
+#hm = hermes.HERMES('/Users/mireland/data/hermes/140310/data/ccd_1/', '/Users/mireland/tel/hermes/140310/ccd_1/', '/Users/mireland/python/pyhermes/cal/ccd_1/')
 
 #Example setup analysis for a full night: green.
-#hm = HERMES('/Users/mireland/data/hermes/140310/data/ccd_2/', '/Users/mireland/tel/hermes/140310/ccd_2/', '/Users/mireland/python/hermes/cal/ccd_2/')
-#hm.go()
+#hm = hermes.HERMES('/Users/mireland/data/hermes/140310/data/ccd_2/', '/Users/mireland/tel/hermes/140310/ccd_2/', '/Users/mireland/python/pyhermes/cal/ccd_2/')
 
-#Example setup analysis for a full night: green.
-#hm = HERMES('/Users/mireland/data/hermes/140310/data/ccd_3/', '/Users/mireland/tel/hermes/140310/ccd_3/', '/Users/mireland/python/hermes/cal/ccd_3/')
+#Example setup analysis for a full night: red.
+#hm = hermes.HERMES('/Users/mireland/data/hermes/140310/data/ccd_3/', '/Users/mireland/tel/hermes/140310/ccd_3/', '/Users/mireland/python/pyhermes/cal/ccd_3/')
+
+#Example setup analysis for a full night: ir.
+#hm = hermes.HERMES('/Users/mireland/data/hermes/140310/data/ccd_4/', '/Users/mireland/tel/hermes/140310/ccd_4/', '/Users/mireland/python/pyhermes/cal/ccd_4/')
 
 #Then go!
 #hm.go()
@@ -151,7 +152,7 @@ class HERMES():
 		for i in range(nf):
 			header['HISTORY'] = 'Input: ' + infiles[i]
 		hl = pyfits.HDUList()
-		hl.append(pyfits.ImageHDU(medcube,header))
+		hl.append(pyfits.ImageHDU(medcube.astype('f4'),header))
 		hl.writeto(self.rdir+outfile,clobber=True)
 		return medcube
 		
@@ -657,8 +658,13 @@ class HERMES():
 				hl.append(new_flux_hdu)
 				hl.append(new_sigma_hdu)
 			hl.writeto(self.rdir + outfile,clobber=True)
-			f_csvfile = open(self.rdir + csvfile, 'a') 
 			objects = np.where(fib_table['TYPE']=='P')[0]
+			#See if we need to write a csv file header line...
+			if not os.path.isfile(self.rdir + csvfile):
+				f_csvfile = open(self.rdir + csvfile, 'a')
+				f_csvfile.write('obsdate, run_start, run_end, fib_num, galahic_num, idname, snr, software,file, rdate\n')
+				f_csvfile.close()
+			f_csvfile = open(self.rdir + csvfile, 'a') 
 			for o in objects:
 				strpos = fib_table[o]['NAME'].find('galahic_')
 				try:
