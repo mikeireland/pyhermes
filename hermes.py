@@ -716,7 +716,7 @@ class HERMES():
         #with positive meaning moving towards the star. This means that we have to red-shift
         #the interpolated spectra, meaning that the new wavelength scale has to be shifted
         #to the blue.
-        hcorr, bcorr = pyasl.baryCorr(header['UTMJD'], np.degrees(fib_table['RA']),np.degrees(fib_table['DEC']), deq=2000.0)
+        hcorr, bcorr = pyasl.baryCorr(header['UTMJD'] + 2400000.5, np.degrees(fib_table['RA']),np.degrees(fib_table['DEC']), deq=2000.0)
         nfib = wavelengths.shape[0]
         new_flux = np.zeros( (nfib,self.fixed_nwave) )
         new_flux_sigma = np.zeros( (nfib,self.fixed_nwave) )
