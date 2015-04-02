@@ -33,6 +33,7 @@ import matplotlib.cm as cm
 import time
 import glob
 import os
+import pdb
     
 class HERMES():
     """The HERMES Class. It must always be initiated with
@@ -368,7 +369,7 @@ class HERMES():
                 ix1 = np.minimum(ix1,npix_extract*oversamp-1)
                 frac = np.tile(ypix_diff_rem,npix_extract).reshape((npix_extract,nx))
                 psfim = psf[ix0]*(1 - frac) + psf[ix1]*frac
-                #Now we turn the psf into weights
+                #Now we turn the PSF into weights
                 weights = flux_on_ron_var*psfim/(1 + flux_on_ron_var*psfim) 
                 psfim /= np.sum(psfim,axis=0)
                 for cube_ix in range( cube.shape[0] ):
@@ -784,13 +785,28 @@ class HERMES():
         weight_dy = np.zeros((nslitlets,nfibres,nsamp))
         #Read in the tramline initial parameters from the calibration directory
         p_tramline = np.loadtxt(self.cdir + 'tramlines_p' + header['SOURCE'][6] + '.txt')
-        #Make a matrix that maps p_tramline numbers to dy
+        #Make a matrix that maps p_tramline numbers to dy, i.e. for parameters
+        #p_tramline, we get the y positions by np.dot(tramline_matrix,p_tramline)
         tramline_matrix = np.zeros((nfibres*nsamp,4))
-        tramline_matrix[:,0] = np.tile(x_ix**2,nfibres)
-        tramline_matrix[:,1] = np.tile(x_ix,nfibres)
-        tramline_matrix[:,2] = np.ones( nfibres*nsamp )
-        tramline_matrix[:,3] = np.repeat( (np.arange(nfibres)+0.5-nfibres/2), nsamp )
+        tramline_matrix[:,0] = np.tile(x_ix**2,nfibres) # Parabolic term with x
+        tramline_matrix[:,1] = np.tile(x_ix,nfibres)    # Linear term with x
+        tramline_matrix[:,2] = np.ones( nfibres*nsamp ) # Offset term
+        tramline_matrix[:,3] = np.repeat( (np.arange(nfibres)+0.5-nfibres/2),
+                                  nsamp ) # Stretch term.
+        #Loop through a few different offsets to get a global shift.
+        ypix = np.dot(tramline_matrix,p_tramline.T)
+        ypix = ypix.reshape( (nfibres,nsamp,nslitlets) )
+        ypix = np.swapaxes(ypix,0,1).flatten().astype(int)
+        xpix = np.repeat( range(nsamp), nfibres*nslitlets)
+        nshifts = 20
+        flux_peak = np.zeros(nshifts)
+        for i in range(nshifts):
+            flux_peak[i] = np.sum(imf[ypix+i-nshifts/2,xpix])
+        p_tramline[:,2] += np.argmax(flux_peak) - nshifts/2       
+        #Make 4 Newton-Rhapson iterations to find the best fitting tramline parameters
         for count in range(0,3):
+         #Go through every slitlet, fiber and sample (nsamp) in the wavelength
+         #direction, finding the offsets.
          for i in range(nslitlets):
             for j in range(nfibres):
                 center_int = np.int(p_tramline[i,2] + p_tramline[i,3]*(j+0.5-nfibres/2))
@@ -1251,7 +1267,10 @@ class HERMES():
         dobias: boolean
             Do we bother subtracting the bias frame.
         """
-        all_files = np.array([os.path.basename(x) for x in glob.glob(self.ddir + '[0123]*.fit*')])
+        all_files = np.array(sorted([os.path.basename(x) for x in glob.glob(self.ddir + '[0123]*.fit*')]))
+        if len(all_files)==0:
+            print("You silly operator. No files. Input directory is: " + self.ddir)
+            return
         biases = np.array([],dtype=np.int)
         flats = np.array([],dtype=np.int)
         arcs = np.array([],dtype=np.int)
