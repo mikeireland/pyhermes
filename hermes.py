@@ -1,6 +1,10 @@
 """This module contains the HERMES data reduction class.
 """
 
+#Example setup analysis for all channels:
+#import hermes
+#hermes.go_all('/Users/mireland/data/hermes/140310/data/', '/Users/mireland/data/hermes/140310/', '/Users/mireland/python/pyhermes/cal/')
+
 #Example setup analysis for a full night: blue        
 #hm = hermes.HERMES('/Users/mireland/data/hermes/140310/data/ccd_1/', '/Users/mireland/tel/hermes/140310/ccd_1/', '/Users/mireland/python/pyhermes/cal/ccd_1/')
 
@@ -33,6 +37,8 @@ import matplotlib.cm as cm
 import time
 import glob
 import os
+import threading
+from multiprocessing import Process
 import pdb
     
 class HERMES():
@@ -129,6 +135,7 @@ class HERMES():
         
     def median_combine(self, infiles, outfile):
         """Median combine a set of files. Most useful for creating a master bias. 
+        
         Parameters
         ----------
         infiles: string array
@@ -610,6 +617,17 @@ class HERMES():
         the radial velocity as constant between frames, and combine the spectra in
         pixel space. 
         
+        Parameters
+        ----------
+        extracted_flux: (nfiles,nfibres*nslitlets,nx) array
+            Flux extracted for a set of files.
+            
+        extracted_sigma: (nfiles,nfibres*nslitlets,nx) array
+            Standard deviations extracted from a set of files
+            
+        wavelengths: (nfibres*nslitlets,nx) array
+            Common wavelength array.
+            
         infiles: string list (optional)
             If given, the combined spectrum is output to a combined fits file that 
             contains the combined flux and the combined single epoch spectra.
@@ -617,7 +635,12 @@ class HERMES():
         csvfile: string
             If given, key parameters are appended to the observations table. 
             NB At this point, no checking is done to see if the software runs multiple times,
-            over-writing previous files.
+            just appending to previous files.
+            
+        Returns
+        -------
+        flux_comb, flux_comb_sigma:  ((nfibres*nslitlets,nx) array, (nfibres*nslitlets,nx) array)
+            Combined flux and combined standard deviation.
         """
         #The combination is simply a weighted arithmetic mean, as we already
         #have the variance as an input parameter.
@@ -772,7 +795,7 @@ class HERMES():
         nx = im.shape[1]
         psf = self.make_psf(npix=npix_extract, oversamp=oversamp)
         #Manually set the index for the samples to the median filtered image.
-        #!!! Hardwired numbers
+        #!!! Hardwired numbers - to be changed for FunnelWeb
         x_ix = 256 + np.arange(nsamp,dtype=int)*512
         y_ix_oversamp = np.arange(oversamp*npix_extract) + 0.5 - (oversamp*npix_extract)/2.0
         y_ix = ( np.arange(npix_extract) + 0.5 - (npix_extract)/2.0 )*oversamp
@@ -801,7 +824,7 @@ class HERMES():
         nshifts = 20
         flux_peak = np.zeros(nshifts)
         for i in range(nshifts):
-            flux_peak[i] = np.sum(imf[ypix+i-nshifts/2,xpix])
+            flux_peak[i] = np.sum(imf[np.maximum(np.minimum(ypix+i-nshifts/2,nx),0),xpix])
         p_tramline[:,2] += np.argmax(flux_peak) - nshifts/2       
         #Make 4 Newton-Rhapson iterations to find the best fitting tramline parameters
         for count in range(0,3):
@@ -834,6 +857,88 @@ class HERMES():
             p_tramline[i,:] += delta_p
         np.savetxt(self.rdir + 'tramlines_p' + header['SOURCE'][6] + '.txt', p_tramline, fmt='%.5e')
         
+    def reduce_field(self,obj_files, arc_file, flat_file):
+        """A wrapper to completely reduce a field, assuming that a bias already exists."""
+        self.fit_tramlines(flat_file)
+        fibre_flat = self.create_fibre_flat(flat_file)
+        arc, arc_sig = self.extract([arc_file])
+        wavelengths = self.fit_arclines(arc, pyfits.getheader(self.ddir + arc_file))
+        cube,badpix = self.make_cube_and_bad(obj_files)
+        flux, sigma = self.extract(obj_files, cube=cube, badpix=badpix)
+        flux, sigma = self.sky_subtract(obj_files, flux, sigma, wavelengths, fibre_flat=fibre_flat)
+        comb_flux, comb_flux_sigma = self.combine_single_epoch_spectra(flux, sigma, wavelengths, infiles=obj_files)
+        return comb_flux, comb_flux_sigma
+        
+    def go(self, min_obj_files=2, dobias=True):
+        """A simple function that finds all fully-executed fields (in this case meaning
+        at least min_obj_files exposures on the field) and analyses them.
+        
+        Parameters
+        ----------
+        min_obj_files: int
+            Minimum number of files per field to call it "good"
+        dobias: boolean
+            Do we bother subtracting the bias frame.
+        """
+        all_files = np.array(sorted([os.path.basename(x) for x in glob.glob(self.ddir + '[0123]*.fit*')]))
+        if len(all_files)==0:
+            print("You silly operator. No files. Input directory is: " + self.ddir)
+            return
+        biases = np.array([],dtype=np.int)
+        flats = np.array([],dtype=np.int)
+        arcs = np.array([],dtype=np.int)
+        objects = np.array([],dtype=np.int)
+        cfgs = np.array([],dtype=np.int)
+        for i,file in enumerate(all_files):
+            header= pyfits.getheader(self.ddir + file)
+            cfgs = np.append(cfgs,header['CFG_FILE'])
+            if header['NDFCLASS'] == 'BIAS':
+                biases = np.append(biases,i)
+            #!!! No idea what LFLAT is, but it seems to be a flat.
+            #!!! Unfortunately, if it is used, the header['SOURCE'] seems to be invalid, so
+            #the code doesn't know what field is in use.
+            elif header['NDFCLASS'] == 'MFFFF':
+                flats = np.append(flats,i)
+            elif header['NDFCLASS'] == 'MFARC':
+                arcs = np.append(arcs,i)
+            elif header['NDFCLASS'] == 'MFOBJECT':
+                objects = np.append(objects,i)
+            else:
+                print("Unusual (ignored) NDFCLASS " + header['NDFCLASS'] + " for file: " + file)
+        #Forget about configs for the biases - just use all of them! (e.g. beginning and end of night)
+        if len(biases) > 2 and dobias:
+            print("Creating Biases")
+            bias = self.median_combine(all_files[biases], 'bias.fits')
+        else:
+            print("No biases. Will use default...")
+#Old code that treated all files with the same sds file as one.
+#        for cfg in set(cfgs):
+#            #For each config, check that there are enough files.
+#            cfg_flats = flats[np.where(cfgs[flats] == cfg)[0]]
+#            cfg_arcs = arcs[np.where(cfgs[arcs] == cfg)[0]]
+#            cfg_objects = objects[np.where(cfgs[objects] == cfg)[0]]
+        #Lets make a config index that changes every time there is a tumble.
+        cfg_starts = np.append(0,np.where(cfgs[1:] != cfgs[:-1])[0]+1)
+        cfg_ends = np.append(np.where(cfgs[1:] != cfgs[:-1])[0]+1,len(cfgs))
+        for i in range(len(cfg_starts)):
+            cfg_start = cfg_starts[i]
+            cfg_end = cfg_ends[i]
+            #For each config, check that there are enough files.
+            cfg_flats = flats[np.where( (flats >= cfg_start) & (flats < cfg_end))[0]]
+            cfg_arcs = arcs[np.where( (arcs >= cfg_start) & (arcs < cfg_end))[0]]
+            cfg_objects = objects[np.where( (objects >= cfg_start) & (objects < cfg_end))[0]]
+            if len(cfg_flats) == 0:
+                print("No flat for field: " + cfgs[cfg_start] + " Continuing to next field...")
+            elif len(cfg_arcs) == 0:
+                print("No arc for field: " + cfgs[cfg_start] + " Continuing to next field...")
+            elif len(cfg_objects) == 0:
+                print("Require at least 2 object files. Not satisfied for: " + cfgs[cfg_start] + " Continuing to next field...")
+            else:
+                print("Processing field: " + cfgs[cfg_start])
+                #!!! NB if there is more than 1 arc or flat, we could be more sophisticated here... 
+                self.reduce_field(all_files[cfg_objects], all_files[cfg_arcs[0]], all_files[cfg_flats[0]])
+        
+# !!! The "once-off" codes below here could maybe be their own module???
         
     def find_tramlines(self, infile, subtract_bias=False, fix_badpix=False, nsearch=20, \
         fillfrac=1.035, central_sep=9.3, global_offset=-6, c_nonlin=3.2e-4):
@@ -938,8 +1043,18 @@ class HERMES():
         outf.close()
     
     def compute_model_wavelengths(self,header):
-        """Given a fits header and fiber positions, compute the model wavelengths for the 
-        central fiber of HERMES.
+        """Given a fits header and other fixed physical numbers, compute the model 
+        wavelengths for the central fiber for HERMES.
+        
+        Parameters
+        ----------
+        header: pyfits header
+            Header of a file to compute the nominal wavelengths for.
+            
+        Returns
+        -------
+        wavelengths: array
+            Wavelengths of the central fiber for each pixel in Angstroms.
         """
         try:
             gratlpmm = header['GRATLPMM']
@@ -974,7 +1089,25 @@ class HERMES():
         return wavelengths * 1e7
 
     def adjust_wavelengths(self, wavelengths, p):
-        """p is (quadratic term, scale term, shift)"""
+        """Adjust a set of model wavelengths by a quadratic function, 
+        used by find_arclines to find the best fit.
+        
+        Parameters
+        ----------
+        wavelengths: (nx) array
+            One-dimensional wavelength array
+        p: (3) array 
+            p[0] is a quadratic term, with p[0]=1 giving a 1 Angstrom shift at the edges
+            of the wavelength array.
+            p[1] is a linear dispersion term, with p[1]=0.01 giving a 1% shift at the 
+            edges of the wavelength array with respect to the center.
+            p[2] is a shift in pixels.
+            
+        Returns
+        -------
+        wavelengths: (nx) array
+            One-dimensional wavelength array
+        """
         #Median wavelength.
         medw = np.median(wavelengths)
         #Delta wavelength from center to edge.
@@ -985,7 +1118,23 @@ class HERMES():
         return wavelengths - p[2]*wstep
 
     def find_arclines(self,arc, header):
-        """ Based on the model wavelength scale, try to find the """
+        """ Based on the model wavelength scale from degisn physical parameters only, try to find the
+        positions of the arc lines. This is not necessarily a robust program  - hopefully it 
+        only has to be run once, and the reasonable fit to the arc lines can then be input
+        (through the calbration directory) to fit_arclines.
+        
+        Parameters
+        ----------
+        arc: (nfibres*nslitlets, nwave) array
+            Extracted arc spectra
+        header: pyfits header
+            Header for the arc file.
+            
+        Returns
+        -------
+        wavelengths: (nslitlets*nfibres, nx) array
+            Wavelengths of each pixel in Angstroms.
+        """
         
         #The following code originally from quick_image_gui.py for Koala. The philosophy is to do our best
         #based on a physical model to put the arclines on to chip coordinates... to raise the
@@ -1077,7 +1226,23 @@ class HERMES():
         return new_wavelengths
         
     def find_wavelengths(self, poly2dfit, fibre_fits, nx):
-        """Find the wavelengths for all fibers and all pixels"""
+        """Find the wavelengths for all fibers and all pixels, based on the model that 
+        includes the polynomial 2D fit ant the linear fiber fits.
+        
+        Parameters
+        ----------
+        poly2dfit: (10) array 
+            2D polynomial fit parameters.
+        fiber_fits: (nfibres*nslitlets, 2) array
+            Linear dispersion fit to each fiber
+        nx: int
+            Number of pixels in the x (dispersion, i.e. wavelength) direction
+        
+        Returns
+        -------
+        wavelengths: (nslitlets*nfibres, nx) array
+            Wavelengths of each pixel in Angstroms.
+        """
         nslitlets=40 #!!! This should be a property of the main class.
         nfibres=10
         wavelengths = np.zeros( (nslitlets*nfibres, nx) )
@@ -1112,7 +1277,24 @@ class HERMES():
         as the local dispersion at each line (arc_x and arc_disp).
         2) Create a matrix such that wave = M * p, with p our parameters.
         3) Find the dx values, convert to dwave.
-        4) Convert the dwave values to dp. """
+        4) Convert the dwave values to dp. 
+        
+        Parameters
+        ----------
+        arc: array
+            Extracted arc spectrum
+        header: pyfits header
+            Header of the arc file
+        plotit: boolean (default False)
+            Do we show the arc line fits?
+        npix_extract: int (default 51)
+            Number of pixels to extract in the fitting of the arc line.
+            
+        Returns
+        -------
+        wavelengths: (nslitlets*nfibres, nx) array
+            Wavelengths of each pixel in Angstroms.
+        """
         nslitlets=40
         nfibres=10
         #Oversampling of the PSF - should be an odd number due to symmetrical 
@@ -1243,87 +1425,38 @@ class HERMES():
         np.savetxt(self.rdir + 'poly2d_p' + header['SOURCE'][6] + '.txt',poly2dfit, fmt='%.6e')
         np.savetxt(self.rdir + 'dispwave_p' + header['SOURCE'][6] + '.txt',fibre_fits, fmt='%.6e')
         return wavelengths
-        
-    def reduce_field(self,obj_files, arc_file, flat_file):
-        """A wrapper to completely reduce a field, assuming that a bias already exists."""
-        self.fit_tramlines(flat_file)
-        fibre_flat = self.create_fibre_flat(flat_file)
-        arc, arc_sig = self.extract([arc_file])
-        wavelengths = self.fit_arclines(arc, pyfits.getheader(self.ddir + arc_file))
-        cube,badpix = self.make_cube_and_bad(obj_files)
-        flux, sigma = self.extract(obj_files, cube=cube, badpix=badpix)
-        flux, sigma = self.sky_subtract(obj_files, flux, sigma, wavelengths, fibre_flat=fibre_flat)
-        comb_flux, comb_flux_sigma = self.combine_single_epoch_spectra(flux, sigma, wavelengths, infiles=obj_files)
-        return comb_flux, comb_flux_sigma
-        
-    def go(self, min_obj_files=2, dobias=True):
-        """A simple function that finds all fully-executed fields (in this case meaning
-        at least min_obj_files exposures on the field) and analyses them.
-        
-        Parameters
-        ----------
-        min_obj_files: int
-            Minimum number of files per field to call it "good"
-        dobias: boolean
-            Do we bother subtracting the bias frame.
-        """
-        all_files = np.array(sorted([os.path.basename(x) for x in glob.glob(self.ddir + '[0123]*.fit*')]))
-        if len(all_files)==0:
-            print("You silly operator. No files. Input directory is: " + self.ddir)
-            return
-        biases = np.array([],dtype=np.int)
-        flats = np.array([],dtype=np.int)
-        arcs = np.array([],dtype=np.int)
-        objects = np.array([],dtype=np.int)
-        cfgs = np.array([],dtype=np.int)
-        for i,file in enumerate(all_files):
-            header= pyfits.getheader(self.ddir + file)
-            cfgs = np.append(cfgs,header['CFG_FILE'])
-            if header['NDFCLASS'] == 'BIAS':
-                biases = np.append(biases,i)
-            #!!! No idea what LFLAT is, but it seems to be a flat.
-            #!!! Unfortunately, if it is used, the header['SOURCE'] seems to be invalid, so
-            #the code doesn't know what field is in use.
-            elif header['NDFCLASS'] == 'MFFFF':
-                flats = np.append(flats,i)
-            elif header['NDFCLASS'] == 'MFARC':
-                arcs = np.append(arcs,i)
-            elif header['NDFCLASS'] == 'MFOBJECT':
-                objects = np.append(objects,i)
-            else:
-                print("Unusual (ignored) NDFCLASS " + header['NDFCLASS'] + " for file: " + file)
-        #Forget about configs for the biases - just use all of them! (e.g. beginning and end of night)
-        if len(biases) > 2 and dobias:
-            print("Creating Biases")
-            bias = self.median_combine(all_files[biases], 'bias.fits')
-        else:
-            print("No biases. Will use default...")
-#Old code that treated all files with the same sds file as one.
-#        for cfg in set(cfgs):
-#            #For each config, check that there are enough files.
-#            cfg_flats = flats[np.where(cfgs[flats] == cfg)[0]]
-#            cfg_arcs = arcs[np.where(cfgs[arcs] == cfg)[0]]
-#            cfg_objects = objects[np.where(cfgs[objects] == cfg)[0]]
-        #Lets make a config index that changes every time there is a tumble.
-        cfg_starts = np.append(0,np.where(cfgs[1:] != cfgs[:-1])[0]+1)
-        cfg_ends = np.append(np.where(cfgs[1:] != cfgs[:-1])[0]+1,len(cfgs))
-        for i in range(len(cfg_starts)):
-            cfg_start = cfg_starts[i]
-            cfg_end = cfg_ends[i]
-            #For each config, check that there are enough files.
-            cfg_flats = flats[np.where( (flats >= cfg_start) & (flats < cfg_end))[0]]
-            cfg_arcs = arcs[np.where( (arcs >= cfg_start) & (arcs < cfg_end))[0]]
-            cfg_objects = objects[np.where( (objects >= cfg_start) & (objects < cfg_end))[0]]
-            if len(cfg_flats) == 0:
-                print("No flat for field: " + cfgs[cfg_start] + " Continuing to next field...")
-            elif len(cfg_arcs) == 0:
-                print("No arc for field: " + cfgs[cfg_start] + " Continuing to next field...")
-            elif len(cfg_objects) == 0:
-                print("Require at least 2 object files. Not satisfied for: " + cfgs[cfg_start] + " Continuing to next field...")
-            else:
-                print("Processing field: " + cfgs[cfg_start])
-                #!!! NB if there is more than 1 arc or flat, we could be more sophisticated here... 
-                self.reduce_field(all_files[cfg_objects], all_files[cfg_arcs[0]], all_files[cfg_flats[0]])
 
-
-
+def worker(arm):
+    """Trivial function needed for multi-threading."""
+    arm.go()
+    return
+     
+def go_all(ddir_root, rdir_root, cdir_root):
+    """Process all CCDs in a default way
+    
+    Parameters
+    ----------
+    ddir_root: string
+        Data directory - should contain subdirectories ccd_1, ccd_2 etc
+    rdir_root: string
+        Reduction directory root - should contain subdirectories ccd_1, ccd_2 etc
+    cdir_root: string
+        Calibration directory root - this is likely CODE_DIRECTORY/cal. Surely this can 
+        be made a default!
+    """
+    blue = HERMES(ddir_root + '/ccd_1/', rdir_root + '/ccd_1/', cdir_root + '/ccd_1/')
+    green = HERMES(ddir_root + '/ccd_2/', rdir_root + '/ccd_2/', cdir_root + '/ccd_2/')
+    red = HERMES(ddir_root + '/ccd_3/', rdir_root + '/ccd_3/', cdir_root + '/ccd_3/')
+    ir = HERMES(ddir_root + '/ccd_4/', rdir_root + '/ccd_4/', cdir_root + '/ccd_4/')
+    arms = [blue,green,red,ir]
+    threads = []
+    for arm in arms:
+        t = Process(target=worker, args=(arm,))
+#        t = threading.Thread(target=worker, args=(arm,))
+#        threads.append(t)
+        t.start()
+    for t in threads:
+        t.join()
+        print("Finished process!")
+    
+    
