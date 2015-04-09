@@ -6,7 +6,7 @@ if len(sys.argv)<4:
     print("Useage: listreduce [data directory] [reduction directory] [list file] [append_string]")
 if len(sys.argv)>4:
     append_string=sys.argv[4]
-else
+else:
     append_string=''
 with open(sys.argv[3],'r') as dir_list:
     for dir_name in dir_list.readlines():
