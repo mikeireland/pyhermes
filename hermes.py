@@ -3,7 +3,7 @@
 
 #Example setup analysis for all channels:
 #import hermes
-#hermes.go_all('/Users/mireland/data/hermes/140310/data/', '/Users/mireland/data/hermes/140310/', '/Users/mireland/python/pyhermes/cal/')
+#hermes.go_all('/Users/mireland/data/hermes/140310/data/', '/Users/mireland/tel/hermes/140310/', '/Users/mireland/python/pyhermes/cal/')
 
 #Example setup analysis for a full night: blue        
 #hm = hermes.HERMES('/Users/mireland/data/hermes/140310/data/ccd_1/', '/Users/mireland/tel/hermes/140310/ccd_1/', '/Users/mireland/python/pyhermes/cal/ccd_1/')
@@ -880,7 +880,7 @@ class HERMES():
         dobias: boolean
             Do we bother subtracting the bias frame.
         """
-        all_files = np.array(sorted([os.path.basename(x) for x in glob.glob(self.ddir + '[0123]*.fit*')]))
+        all_files = np.array(sorted([os.path.basename(x) for x in glob.glob(self.ddir + '[0123]*[0123456789].fit*')]))
         if len(all_files)==0:
             print("You silly operator. No files. Input directory is: " + self.ddir)
             return
@@ -891,7 +891,11 @@ class HERMES():
         cfgs = np.array([],dtype=np.int)
         for i,file in enumerate(all_files):
             header= pyfits.getheader(self.ddir + file)
-            cfgs = np.append(cfgs,header['CFG_FILE'])
+            try: 
+                cfg = header['CFG_FILE']
+            except:
+                cfg = ''
+            cfgs = np.append(cfgs,cfg)
             if header['NDFCLASS'] == 'BIAS':
                 biases = np.append(biases,i)
             #!!! No idea what LFLAT is, but it seems to be a flat.
@@ -1444,11 +1448,22 @@ def go_all(ddir_root, rdir_root, cdir_root):
         Calibration directory root - this is likely CODE_DIRECTORY/cal. Surely this can 
         be made a default!
     """
-    blue = HERMES(ddir_root + '/ccd_1/', rdir_root + '/ccd_1/', cdir_root + '/ccd_1/')
-    green = HERMES(ddir_root + '/ccd_2/', rdir_root + '/ccd_2/', cdir_root + '/ccd_2/')
-    red = HERMES(ddir_root + '/ccd_3/', rdir_root + '/ccd_3/', cdir_root + '/ccd_3/')
-    ir = HERMES(ddir_root + '/ccd_4/', rdir_root + '/ccd_4/', cdir_root + '/ccd_4/')
-    arms = [blue,green,red,ir]
+    #Create directories if they don't already exist.
+    if os.path.isfile(rdir_root):
+        print("ERROR: reduction directory already exists as a file!")
+        raise UserWarning
+    if not os.path.isdir(rdir_root):
+        try:
+            os.mkdir(rdir_root)
+        except:
+            print("ERROR: Could not create directory " + rdir_root)
+            raise UserWarning
+    ccds = ['ccd_1', 'ccd_2', 'ccd_3', 'ccd_4']
+    arms = []
+    for ccd in ccds:
+        if not os.path.isdir(rdir_root + '/' + ccd):
+            os.mkdir(rdir_root + '/' + ccd)
+        arms.append(HERMES(ddir_root + '/' + ccd+ '/', rdir_root + '/' + ccd + '/', cdir_root + '/' + ccd + '/'))
     threads = []
     for arm in arms:
         t = Process(target=worker, args=(arm,))
