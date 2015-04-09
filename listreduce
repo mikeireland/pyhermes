@@ -4,6 +4,7 @@ import sys
 import hermes
 if len(sys.argv)<4:
     print("Useage: listreduce [data directory] [reduction directory] [list file] [append_string]")
+    sys.exit()
 if len(sys.argv)>4:
     append_string=sys.argv[4]
 else:

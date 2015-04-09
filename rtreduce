@@ -6,6 +6,7 @@ import time
 repeat_analysis_time = 20
 if len(sys.argv)<3:
     print("Useage: allarms [data directory] [reduction directory]")
+    sys.exit()
 while True:
     print("**** Starting reduction ****")
     hermes.go_all(sys.argv[1], sys.argv[2], "./cal/", skip_done=True)

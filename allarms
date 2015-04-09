@@ -4,4 +4,5 @@ import sys
 import hermes
 if len(sys.argv)<3:
     print("Useage: allarms [data directory] [reduction directory]")
+    sys.exit()
 hermes.go_all(sys.argv[1], sys.argv[2], "./cal/")
