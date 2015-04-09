@@ -29,6 +29,16 @@ For each CCD, the ``go`` function does the following:
  * Sky subtract for each slice of the cube separately.
  * Combine the spectra, remaining in a pixel grid. Then apply a single-epoch barycentric correction.
 
+Utility Functions
+=================
+
+The following functions should be executed from the code directory. Just typing the command gives the syntax.
+
+``allarms`` : reduces all HERMES arms in a directory.
+
+``listreduce`` : reduces a list of directories with HERMES arms. e.g. if you want to reduce all of 2014, type in the DATA_DIRECTORY ``ls -d 14???? > 2014.txt``, then execute ``listreduce DATA_DIRECTORY REDUCTION_DIRECTORY DATA_DIRECTORY/2014.txt data``. The last ``data`` is needed if the directories have a common subdirectory "data" containing directories like ccd_1.
+
+``rtreduce`` : like ``allarms`` except it runs continuously, reducing data as it comes in.
 
 Calibration Files
 =================

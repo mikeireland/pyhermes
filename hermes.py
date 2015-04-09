@@ -612,6 +612,16 @@ class HERMES():
         """
         return []
     
+    def make_comb_filename(self, outfile):
+        """Create filename by inserting "comb" in-between the name of
+        the file and ".fits
+        """
+        spos = outfile.find('.fits')
+        if spos < 0:
+            print("Weird file name... no fits extension")
+            raise UserWarning
+        return outfile[:spos] + 'comb' + outfile[spos:]
+    
     def combine_single_epoch_spectra(self, extracted_flux, extracted_sigma, wavelengths, infiles=[], csvfile='observation_table.csv'):
         """ If spectra were taken in a single night with a single arc, we can approximate 
         the radial velocity as constant between frames, and combine the spectra in
@@ -655,12 +665,13 @@ class HERMES():
             headers = []
             for infile in infiles:
                 headers.append(pyfits.getheader(self.ddir + infile))
-            runs = [header['RUN'] for header in headers]
+            runs = [aheader['RUN'] for aheader in headers]
             start = np.argmin(runs)
             end = np.argmax(runs)
             header = headers[start]
             #To keep a record of which files went in to this.
             header['RUNLIST'] = str(runs)[1:-1]
+            header['NRUNS'] = len(infiles)
             #Start and end
             header['HAEND'] = headers[end]['HAEND']
             header['ZDEND'] = headers[end]['ZDEND']
@@ -672,16 +683,10 @@ class HERMES():
             header['STSTART'] = headers[start]['STSTART']
             #Means. If more accuracy than this is needed, then individual
             #(i.e. non-combined) files should be used!
-            header['EPOCH'] = np.mean([header['EPOCH'] for header in headers])
-            header['UTMJD'] = np.mean([header['UTMJD'] for header in headers])
+            header['EPOCH'] = np.mean([aheader['EPOCH'] for aheader in headers])
+            header['UTMJD'] = np.mean([aheader['UTMJD'] for aheader in headers])
             #Lets always name the file by the first file in the set.
-            outfile = infiles[start]
-            spos = outfile.find('.fits')
-            if spos < 0:
-                print("Weird file name... no fits extension")
-                raise UserWarning
-            outfile = outfile[:spos] + 'comb' + outfile[spos:]
-            
+            outfile = self.make_comb_filename(infiles[start])
             #The header and fiber table of the first input file is retained, with
             #key parameters averaged from each header 
             #The first fits image (zeroth extension) is the combined flux.
@@ -690,13 +695,16 @@ class HERMES():
             #The third fits extension is the wavelength scale.
             hl = pyfits.HDUList()
             hl.append(pyfits.ImageHDU(flux_comb.astype('f4'),header))
-            hl.append(pyfits.open(self.ddir + infiles[start])[1])
-            hl.append(pyfits.ImageHDU(flux_comb_sigma.astype('f4')))
-            hl.append(pyfits.ImageHDU(wavelengths))
             fib_table = pyfits.getdata(self.ddir + infiles[start],1)
             #Check for an obscure bug, where the extension orders are changed...
             if len(fib_table)==1:
                 fib_table = pyfits.getdata(self.ddir + infiles[start],2)
+                hl.append(pyfits.open(self.ddir + infiles[start])[2])
+            else:
+                hl.append(pyfits.open(self.ddir + infiles[start])[1])
+            hl.append(pyfits.ImageHDU(flux_comb_sigma.astype('f4')))
+            hl.append(pyfits.ImageHDU(wavelengths))
+
             if barycorr:
                 new_flux_hdu, new_sigma_hdu = self.create_barycentric_spectra(header, fib_table, flux_comb, flux_comb_sigma, wavelengths)
                 hl.append(new_flux_hdu)
@@ -869,7 +877,7 @@ class HERMES():
         comb_flux, comb_flux_sigma = self.combine_single_epoch_spectra(flux, sigma, wavelengths, infiles=obj_files)
         return comb_flux, comb_flux_sigma
         
-    def go(self, min_obj_files=2, dobias=True):
+    def go(self, min_obj_files=2, dobias=True, skip_done=False):
         """A simple function that finds all fully-executed fields (in this case meaning
         at least min_obj_files exposures on the field) and analyses them.
         
@@ -911,8 +919,11 @@ class HERMES():
                 print("Unusual (ignored) NDFCLASS " + header['NDFCLASS'] + " for file: " + file)
         #Forget about configs for the biases - just use all of them! (e.g. beginning and end of night)
         if len(biases) > 2 and dobias:
-            print("Creating Biases")
-            bias = self.median_combine(all_files[biases], 'bias.fits')
+            if skip_done and os.path.isfile(self.rdir + '/' + 'bias.fits'):
+                print("Skipping (already done) bias creation")
+            else:
+                print("Creating Biases")
+                bias = self.median_combine(all_files[biases], 'bias.fits')
         else:
             print("No biases. Will use default...")
 #Old code that treated all files with the same sds file as one.
@@ -935,9 +946,16 @@ class HERMES():
                 print("No flat for field: " + cfgs[cfg_start] + " Continuing to next field...")
             elif len(cfg_arcs) == 0:
                 print("No arc for field: " + cfgs[cfg_start] + " Continuing to next field...")
-            elif len(cfg_objects) == 0:
+            elif len(cfg_objects) < min_obj_files:
                 print("Require at least 2 object files. Not satisfied for: " + cfgs[cfg_start] + " Continuing to next field...")
             else:
+                if skip_done:
+                    comb_filename = self.make_comb_filename(all_files[cfg_objects[0]])
+                    if os.path.isfile(self.rdir + '/' + comb_filename):
+                        header = pyfits.getheader(self.rdir + '/' + comb_filename)
+                        if header['NRUNS'] == len(cfg_objects):
+                            print("Ignoring processed field: " + comb_filename)
+                            continue
                 print("Processing field: " + cfgs[cfg_start])
                 #!!! NB if there is more than 1 arc or flat, we could be more sophisticated here... 
                 self.reduce_field(all_files[cfg_objects], all_files[cfg_arcs[0]], all_files[cfg_flats[0]])
@@ -1373,7 +1391,11 @@ class HERMES():
                 #Find the range pixel values that correspond to the arc lines for all
                 #fibers.
                 center_int = int(np.median(arc_x[:,i]) + nx/2)
-                subim = np.transpose(arc[:,center_int - npix_extract/2:center_int + npix_extract/2+1])
+                subim = np.zeros((arc.shape[0], npix_extract))
+                subim[:,np.maximum(npix_extract/2 - center_int,0):\
+                        np.minimum(arc.shape[1]-center_int-npix_extract/2-1,arc.shape[1])] = \
+                        arc[:,np.maximum(center_int - npix_extract/2,0):np.minimum(center_int + npix_extract/2+1,arc.shape[1])]
+                subim = subim.T
                 #Start off with a slow interpolation for simplicity. 
                 for k in range(nslitlets*nfibres):
                     offset = arc_x[k,i] - center_int + nx/2
@@ -1430,12 +1452,12 @@ class HERMES():
         np.savetxt(self.rdir + 'dispwave_p' + header['SOURCE'][6] + '.txt',fibre_fits, fmt='%.6e')
         return wavelengths
 
-def worker(arm):
+def worker(arm, skip_done=False):
     """Trivial function needed for multi-threading."""
-    arm.go()
+    arm.go(skip_done=skip_done)
     return
      
-def go_all(ddir_root, rdir_root, cdir_root):
+def go_all(ddir_root, rdir_root, cdir_root, skip_done=False):
     """Process all CCDs in a default way
     
     Parameters
@@ -1465,13 +1487,14 @@ def go_all(ddir_root, rdir_root, cdir_root):
             os.mkdir(rdir_root + '/' + ccd)
         arms.append(HERMES(ddir_root + '/' + ccd+ '/', rdir_root + '/' + ccd + '/', cdir_root + '/' + ccd + '/'))
     threads = []
-    for arm in arms:
-        t = Process(target=worker, args=(arm,))
+    for ix,arm in enumerate(arms):
+        t = Process(target=worker, args=(arm,skip_done))
+        t.name = ccds[ix]
 #        t = threading.Thread(target=worker, args=(arm,))
-#        threads.append(t)
+        threads.append(t)
         t.start()
     for t in threads:
         t.join()
-        print("Finished process!")
+        print("Finished process: " + t.name)
     
     
