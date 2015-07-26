@@ -44,16 +44,35 @@ import pdb
     
 class HERMES():
     """The HERMES Class. It must always be initiated with
-    a data, reduction and calibration directory. """
-    def __init__(self, ddir, rdir, cdir):
+    a data, reduction and calibration directory. 
+    
+    Parameters
+    ----------
+    ddir: string
+        Raw data directory
+        
+    rdir: string
+        Reduction directory
+        
+    cdir: string
+        
+    gdir: string (optional)
+        GALAH collaboration standard output directory. If not given, the rdir is used.
+    """
+    def __init__(self, ddir, rdir, cdir, gdir=''):
         self.ddir = ddir
         self.rdir = rdir
         self.cdir = cdir
+        if gdir=='':
+            self.gdir = rdir
+        else:
+            self.gdir = gdir
         #Each release should increment this number.
         self.release = 0.1
         #A dictionary of central wavelengths (can be changed)
         #This comes from the SPECTID
         self.fixed_wave0 = {'BL':4700.0,'GN':5630.0,'RD':6460.0,'RR':7570.0}
+        self.ccd_nums = {'BL':'1','GN':'2','RD':'3','RR':'4'}
         self.fixed_R = 200000
         self.fixed_nwave = 9000
         
@@ -215,8 +234,11 @@ class HERMES():
             cube[i,:,:]=im
             normalised_cube[i,:,:]= im/np.median(im)
             bad[i,:,:] = badpix
+        # Create a mean image that ignores the maximum pixel values over all images (i.e. cosmic rays)
         reference_im = (np.sum(normalised_cube,axis=0) - np.max(normalised_cube,axis=0))/(len(infiles) - 1.0)
         szy = cube.shape[1]
+        # Look for bad pixels (hot or cosmic rays) by empirically finding pixels that deviate
+        # unusually from the minimum image.
         for i in range(len(infiles)):
             diff = normalised_cube[i,:,:] - reference_im
             #Entire rows can't be used for a row_deviation, as tramlines curve. But
@@ -623,7 +645,8 @@ class HERMES():
             raise UserWarning
         return outfile[:spos] + 'comb' + outfile[spos:]
     
-    def combine_single_epoch_spectra(self, extracted_flux, extracted_sigma, wavelengths, infiles=[], csvfile='observation_table.csv', is_std=False):
+    def combine_single_epoch_spectra(self, extracted_flux, extracted_sigma, wavelengths, infiles=[], \
+            csvfile='observation_table.csv', is_std=False, fco_num=0):
         """ If spectra were taken in a single night with a single arc, we can approximate 
         the radial velocity as constant between frames, and combine the spectra in
         pixel space. 
@@ -670,9 +693,11 @@ class HERMES():
             start = np.argmin(runs)
             end = np.argmax(runs)
             header = headers[start]
+
             #To keep a record of which files went in to this.
             header['RUNLIST'] = str(runs)[1:-1]
             header['NRUNS'] = len(infiles)
+
             #Start and end
             header['HAEND'] = headers[end]['HAEND']
             header['ZDEND'] = headers[end]['ZDEND']
@@ -682,12 +707,19 @@ class HERMES():
             header['ZDSTART'] = headers[start]['ZDSTART']
             header['UTSTART'] = headers[start]['UTSTART']
             header['STSTART'] = headers[start]['STSTART']
+
             #Means. If more accuracy than this is needed, then individual
             #(i.e. non-combined) files should be used!
             header['EPOCH'] = np.mean([aheader['EPOCH'] for aheader in headers])
             header['UTMJD'] = np.mean([aheader['UTMJD'] for aheader in headers])
-            #Lets always name the file by the first file in the set.
-            outfile = self.make_comb_filename(infiles[start])
+            
+            #For GALAH, we need to create a special directory.
+            ix0 = header['CFG_FILE'].find('_')
+            ix1 = header['CFG_FILE'].rfind('_')
+            field_directory = header['CFG_FILE'][ix0+1:ix1]
+            if not os.path.exists(self.gdir + field_directory):
+                os.makedirs(self.gdir + field_directory)
+            
             #The header and fiber table of the first input file is retained, with
             #key parameters averaged from each header 
             #The first fits image (zeroth extension) is the combined flux.
@@ -704,12 +736,23 @@ class HERMES():
             else:
                 hl.append(pyfits.open(self.ddir + infiles[start])[1])
             hl.append(pyfits.ImageHDU(flux_comb_sigma.astype('f4')))
-            hl.append(pyfits.ImageHDU(wavelengths))
 
+            #!!! TODO: Add bcorr to the per-field fits files, and header keywords to 
+            #see if barycorr has been applied.      
             if barycorr:
-                new_flux_hdu, new_sigma_hdu = self.create_barycentric_spectra(header, fib_table, flux_comb, flux_comb_sigma, wavelengths)
-                hl.append(new_flux_hdu)
-                hl.append(new_sigma_hdu)
+                logwave_flux_hdu, logwave_sigma_hdu, linwave_flux, linwave_sigma, wave_new, bcorr = \
+                    self.create_barycentric_spectra(header, fib_table, flux_comb, flux_comb_sigma, wavelengths)
+
+                hl.append(pyfits.ImageHDU(wave_new))
+            
+                #Add the extra log-wavelength extensions that Mike seems to like so much. 
+                hl.append(logwave_flux_hdu)
+                hl.append(logwave_sigma_hdu)
+            else:
+                hl.append(pyfits.ImageHDU(wavelengths))
+                
+            #Lets always name the file by the first file in the set.
+            outfile = self.make_comb_filename(infiles[start])
             hl.writeto(self.rdir + outfile,clobber=True)
             objects = np.where(fib_table['TYPE']=='P')[0]
             #See if we need to write a csv file header line...
@@ -748,6 +791,24 @@ class HERMES():
                 f_csvfile.write('{0:s},{1:d},{2:d},{3:d},{4:d},{5:s},{6:6.1f},{7:5.2f},{8:s},{9:s}\n'.format(
                     data_date,runs[start], runs[end], o, galahic, fib_table[o]['NAME'],
                     np.median(flux_comb[o,:]/flux_comb_sigma[o,:]), self.release,outfile,analysis_date)) 
+                #Also write individual fits files - only for GALAHIC spectra
+                #TODO: Turn these into individual fields?
+                if (galahic>0):
+                    filename = "{0}{1:03d}{2}_{2:06d}.fits".format(data_date,fco_num,self.ccd_nums[header['SPECTID']],galahic)  
+                    flux_hdu = pyfits.ImageHDU(linwave_flux.data[o,:].astype('f4'),header)
+                    sig_hdu  = pyfits.ImageHDU(linwave_sigma.data[o,:].astype('f4'))
+                    for key in ("CRVAL1", "CDELT1", "CRPIX1", "CTYPE1", "CUNIT1"):
+                        flux_hdu.header[key] = linwave_flux.header[key]
+                        sig_hdu.header[key] = linwave_sigma.header[key]
+                    #Add in header stuff from fiber table.
+                    flux_hdu.header['RA'] = np.degrees(fib_table[o]['RA'])
+                    flux_hdu.header['DEC'] = np.degrees(fib_table[o]['DEC'])
+                    flux_hdu.header['FIBRE'] = o + 1 #!!! Starting at 1 for 2dFDR convention...
+                    flux_hdu.header['PIVOT'] = fib_table[o]['PIVOT']
+                    hl = pyfits.HDUList()
+                    hl.append(flux_hdu)
+                    hl.append(sig_hdu)
+                    hl.writeto(self.gdir + field_directory +'/' + filename, clobber=True)
             f_csvfile.close()
                         
         return flux_comb, flux_comb_sigma
@@ -766,17 +827,28 @@ class HERMES():
         nfib = wavelengths.shape[0]
         new_flux = np.zeros( (nfib,self.fixed_nwave) )
         new_flux_sigma = np.zeros( (nfib,self.fixed_nwave) )
+        new_lin_flux = np.zeros( (nfib,self.fixed_nwave) )
+        new_lin_flux_sigma = np.zeros( (nfib,self.fixed_nwave) )
+        new_wave = self.fixed_wave0[header['SPECTID']]*np.exp(np.arange(self.fixed_nwave)/float(self.fixed_R))
+        new_lin_wave = self.fixed_wave0[header['SPECTID']]*(1 + np.arange(self.fixed_nwave)/float(self.fixed_R))
+        dnew_wave = new_wave[1:]-new_wave[:-1]
+        dnew_wave = np.append(dnew_wave, dnew_wave[-1])
+        dnew_lin_wave = new_lin_wave[1]-new_lin_wave[0]
+        new_wavelengths = wavelengths.copy()
         for i in range(nfib):
-            new_wave = self.fixed_wave0[header['SPECTID']]*np.exp(-bcorr[i]/2.9979e5 + np.arange(self.fixed_nwave)/float(self.fixed_R))
-            dnew_wave = new_wave[1:]-new_wave[:-1]
-            dnew_wave = np.append(dnew_wave, dnew_wave[-1])
-            dwave = wavelengths[i,1:]-wavelengths[i,:-1]
+            new_wavelengths[i,:] = wavelengths[i,:]*(1 + bcorr[i]/2.9979e5)
+            dwave = new_wavelengths[i,1:]-new_wavelengths[i,:-1]
             dwave = np.append(dwave, dwave[-1])
-            dwave = np.interp(new_wave, wavelengths[i,:], dwave)
-            new_flux[i,:] = np.interp(new_wave, wavelengths[i,:], flux[i,:], left=np.nan, right=np.nan)
+            dwave_lin = np.interp(new_lin_wave, new_wavelengths[i,:], dwave)
+            dwave     = np.interp(new_wave, new_wavelengths[i,:], dwave)
+            new_flux[i,:] = np.interp(new_wave, new_wavelengths[i,:], flux[i,:], left=np.nan, right=np.nan)
+            new_lin_flux[i,:] = np.interp(new_lin_wave, new_wavelengths[i,:], flux[i,:], left=np.nan, right=np.nan)
             #Preserve the meaning of sigma if many samples are averaged together. 
-            new_flux_sigma[i,:] = np.interp(new_wave, wavelengths[i,:], flux_sigma[i,:], 
+            new_flux_sigma[i,:] = np.interp(new_wave, new_wavelengths[i,:], flux_sigma[i,:], 
                 left=np.nan, right=np.nan) * np.sqrt(dnew_wave/dwave)
+            new_lin_flux_sigma[i,:] = np.interp(new_lin_wave, new_wavelengths[i,:], flux_sigma[i,:], 
+                left=np.nan, right=np.nan) * np.sqrt(dnew_lin_wave/dwave_lin)
+        # The log-wavelength header
         new_hdu = pyfits.ImageHDU(new_flux.astype('f4'))
         sig_hdu = pyfits.ImageHDU(new_flux_sigma.astype('f4'))
         new_hdu.header['CRVAL1']=np.log(self.fixed_wave0[header['SPECTID']])
@@ -790,7 +862,21 @@ class HERMES():
         new_hdu.header['CTYPE2']='Fibre Number'
         new_hdu.header['CUNIT2'] = ''
         sig_hdu.header = new_hdu.header
-        return new_hdu, sig_hdu
+        # The linear-wavelength header
+        new_lin_hdu = pyfits.ImageHDU(new_lin_flux.astype('f4'))
+        lin_sig_hdu = pyfits.ImageHDU(new_lin_flux_sigma.astype('f4'))
+        new_lin_hdu.header['CRVAL1']=self.fixed_wave0[header['SPECTID']]
+        new_lin_hdu.header['CDELT1']=self.fixed_wave0[header['SPECTID']]/self.fixed_R
+        new_lin_hdu.header['CRPIX1']=1.0
+        new_lin_hdu.header['CRVAL2']=0.0
+        new_lin_hdu.header['CDELT2']=1.0
+        new_lin_hdu.header['CRPIX2']=1.0
+        new_lin_hdu.header['CTYPE1']='Wavelength'
+        new_lin_hdu.header['CUNIT1']='Angstroms'
+        new_lin_hdu.header['CTYPE2']='Fibre Number'
+        new_lin_hdu.header['CUNIT2'] = ''
+        lin_sig_hdu.header = new_lin_hdu.header
+        return new_hdu, sig_hdu, new_lin_hdu, lin_sig_hdu, new_wavelengths, bcorr
             
     def fit_tramlines(self, infile, subtract_bias=False, fix_badpix=False):
         """Make a linear fit to tramlines, based on a simplified PSF model """
@@ -879,7 +965,7 @@ class HERMES():
             p_tramline[i,:] += delta_p
         np.savetxt(self.rdir + 'tramlines_p' + header['SOURCE'][6] + '.txt', p_tramline, fmt='%.5e')
         
-    def reduce_field(self,obj_files, arc_file, flat_file, is_std=False):
+    def reduce_field(self,obj_files, arc_file, flat_file, is_std=False, fco_num=0):
         """A wrapper to completely reduce a field, assuming that a bias already exists."""
         self.fit_tramlines(flat_file)
         fibre_flat = self.create_fibre_flat(flat_file)
@@ -889,7 +975,7 @@ class HERMES():
         flux, sigma = self.extract(obj_files, cube=cube, badpix=badpix)
         if not is_std:
             flux, sigma = self.sky_subtract(obj_files, flux, sigma, wavelengths, fibre_flat=fibre_flat)
-        comb_flux, comb_flux_sigma = self.combine_single_epoch_spectra(flux, sigma, wavelengths, infiles=obj_files, is_std=is_std)
+        comb_flux, comb_flux_sigma = self.combine_single_epoch_spectra(flux, sigma, wavelengths, infiles=obj_files, is_std=is_std, fco_num=fco_num)
         return comb_flux, comb_flux_sigma
         
     def go(self, min_obj_files=2, dobias=True, skip_done=False):
@@ -994,7 +1080,7 @@ class HERMES():
                             continue
                 print("Processing field: " + cfgs[cfg_start])
                 #!!! NB if there is more than 1 arc or flat, we could be more sophisticated here... 
-                self.reduce_field(all_files[cfg_objects], all_files[cfg_arcs[0]], all_files[cfg_flats[0]], is_std = cfg_is_std)
+                self.reduce_field(all_files[cfg_objects], all_files[cfg_arcs[0]], all_files[cfg_flats[0]], is_std = cfg_is_std, fco_num=i)
         
 # !!! The "once-off" codes below here could maybe be their own module???
         
@@ -1493,7 +1579,7 @@ def worker(arm, skip_done=False):
     arm.go(skip_done=skip_done)
     return
      
-def go_all(ddir_root, rdir_root, cdir_root, skip_done=False):
+def go_all(ddir_root, rdir_root, cdir_root, gdir_root='',skip_done=False):
     """Process all CCDs in a default way
     
     Parameters
@@ -1518,10 +1604,12 @@ def go_all(ddir_root, rdir_root, cdir_root, skip_done=False):
             raise UserWarning
     ccds = ['ccd_1', 'ccd_2', 'ccd_3', 'ccd_4']
     arms = []
+    if gdir_root=='':
+        gdir_root = rdir_root
     for ccd in ccds:
         if not os.path.isdir(rdir_root + '/' + ccd):
             os.mkdir(rdir_root + '/' + ccd)
-        arms.append(HERMES(ddir_root + '/' + ccd+ '/', rdir_root + '/' + ccd + '/', cdir_root + '/' + ccd + '/'))
+        arms.append(HERMES(ddir_root + '/' + ccd+ '/', rdir_root + '/' + ccd + '/', cdir_root + '/' + ccd + '/',gdir=gdir_root))
     threads = []
     for ix,arm in enumerate(arms):
         t = Process(target=worker, args=(arm,skip_done))
