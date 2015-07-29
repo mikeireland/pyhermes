@@ -814,7 +814,7 @@ class HERMES():
                     data_date,runs[start], runs[end], o+1, galahic, fib_table[o]['NAME'],
                     np.median(flux_comb[o,:]/flux_comb_sigma[o,:]), self.release,outfile,analysis_date)) 
                 if (galahic==-1):
-					galahic = fib_table[o]['NAME'] 
+                    galahic = fib_table[o]['NAME'] 
                 filename = "{0}_{1}{2}.fits".format(data_date,self.ccd_nums[header['SPECTID']],galahic)
                 flux_hdu = pyfits.ImageHDU(linwave_flux.data[o,:].astype('f4'),header)
                 sig_hdu  = pyfits.ImageHDU(linwave_sigma.data[o,:].astype('f4'))
