@@ -23,7 +23,7 @@ For each CCD, the ``go`` function does the following:
 
  * Create fiber flat.
  * Extracts arc.
- * Make a wavelength solution with {\tt fit_arclines}.
+ * Make a wavelength solution with ``fit_arclines``.
  * Turn multiple exposures into a data cube, and look for outlying pixels which are cosmic rays or extra bad pixels.
  * Extract each slice of the cube separately.
  * Sky subtract for each slice of the cube separately.
@@ -39,6 +39,11 @@ The following functions should be executed from the code directory. Just typing 
 ``listreduce`` : reduces a list of directories with HERMES arms. e.g. if you want to reduce all of 2014, type in the DATA_DIRECTORY ``ls -d 14???? > 2014.txt``, then execute ``listreduce DATA_DIRECTORY REDUCTION_DIRECTORY DATA_DIRECTORY/2014.txt data``. The last ``data`` is needed if the directories have a common subdirectory "data" containing directories like ccd_1.
 
 ``rtreduce`` : like ``allarms`` except it runs continuously, reducing data as it comes in.
+
+Output Files
+============
+
+The *comb* output file (e.g. 10mar200020comb.fits) includes in its primary fits extension the combined spectra for a single epoch, for every fiber. The data are arranged so that in the IRAF task splot you need to type ``:dispaxis 1``.
 
 Calibration Files
 =================

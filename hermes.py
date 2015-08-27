@@ -743,6 +743,8 @@ class HERMES():
                 hl.append(pyfits.open(self.ddir + infiles[start])[1])
             hl.append(pyfits.ImageHDU(flux_comb_sigma.astype('f4')))
 
+            #!!! TODO: Add bcorr to the per-field fits files, and header keywords to 
+            #see if barycorr has been applied.      
             if barycorr:
                 logwave_flux_hdu, logwave_sigma_hdu, linwave_flux, linwave_sigma, wave_new, bcorr = \
                     self.create_barycentric_spectra(header, fib_table, flux_comb, flux_comb_sigma, wavelengths)
@@ -801,7 +803,7 @@ class HERMES():
                     try:
                         galahic = int(fib_table[o]['NAME'][strpos+8:])
                     except:
-                        galahic= -1
+                        galahic=-1         
                 else:
                     galahic=-1
                 #date, minimum file number, maximum file number, fiber number, 
@@ -902,7 +904,7 @@ class HERMES():
         new_lin_hdu.header['CUNIT2'] = ''
         lin_sig_hdu.header = new_lin_hdu.header
         return new_hdu, sig_hdu, new_lin_hdu, lin_sig_hdu, new_wavelengths, bcorr
-    
+
     def fit_tramlines(self, infile, subtract_bias=False, fix_badpix=False):
         """Make a linear fit to tramlines, based on a simplified PSF model """
         im = self.basic_process(infile)
