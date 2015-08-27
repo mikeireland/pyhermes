@@ -647,7 +647,7 @@ class HERMES():
         return outfile[:spos] + 'comb' + outfile[spos:]
     
     def combine_single_epoch_spectra(self, extracted_flux, extracted_sigma, wavelengths, infiles=[], \
-            csvfile='observation_table.csv', is_std=False):
+            csvfile='observation_table.csv', is_std=False,cobfile=[]):
         """ If spectra were taken in a single night with a single arc, we can approximate 
         the radial velocity as constant between frames, and combine the spectra in
         pixel space. 
@@ -685,6 +685,7 @@ class HERMES():
         flux_comb = np.sum(weights*extracted_flux,0)/np.sum(weights,0)
         extracted_flux[ww] = np.nan
         flux_comb_sigma = np.sqrt(1.0/np.sum(weights,0))
+        cob = pyfits.getheader(self.ddir + cobfile)['RUN']
         #Save the data if necessary.
         if len(infiles)>0:
             headers = []
@@ -773,16 +774,14 @@ class HERMES():
                 o = np.where(fib_table['PIVOT'] == (header['STD_FIB']))[0][0]
                 medsnrs = np.median(flux_comb/flux_comb_sigma, axis=1)
                 if np.argmax(medsnrs) != o:
-                    print("Something dodgy with this standard fiber! Please check manually here...")
+                    print("Something dodgy with this standard fiber: " +header['STD_NAME']+"! Please check manually here...")
                     pdb.set_trace()
-				#Ly - code copied from Mike's below to output individual standard star spectrum:
 				#File name = standardstarname_ccd.fits
 				#WG4 to rename/work around to suit their codes
                 filename = "{0}_{1}.fits".format(header['STD_NAME'].replace(' ',''),self.ccd_nums[header['SPECTID']])
                 flux_hdu = pyfits.ImageHDU(linwave_flux.data[o,:].astype('f4'),header)
                 sig_hdu  = pyfits.ImageHDU(linwave_sigma.data[o,:].astype('f4'))
-                #Add in header stuff from fiber table 
-                #TODO !!!Add real RA and DEC to standard observations (not included in raw data), and reduce them separately later.              
+                #Add in header stuff from fiber table              
                 flux_hdu.header['RA'] = header['MEANRA']
                 flux_hdu.header['DEC'] = header['MEANDEC']
                 flux_hdu.header['V_BARY'] = bcorr[o]
@@ -816,11 +815,12 @@ class HERMES():
                     data_date,runs[start], runs[end], o+1, galahic, fib_table[o]['NAME'],
                     np.median(flux_comb[o,:]/flux_comb_sigma[o,:]), self.release,outfile,analysis_date)) 
                 if (galahic==-1):
-                    galahic = fib_table[o]['NAME'] 
-                filename = "{0}_{1}{2}.fits".format(data_date,self.ccd_nums[header['SPECTID']],galahic)
+                    galahic = 'FIB' + str(o+1)
+                filename = "{0}_{1}_{2}.fits".format(int(float(data_date)*10000+float(cob)),galahic,self.ccd_nums[header['SPECTID']])
                 flux_hdu = pyfits.ImageHDU(linwave_flux.data[o,:].astype('f4'),header)
                 sig_hdu  = pyfits.ImageHDU(linwave_sigma.data[o,:].astype('f4'))
                 #Add in header stuff from fiber table.
+                flux_hdu.header['OBJ_NAME'] = fib_table[o]['NAME']
                 flux_hdu.header['RA'] = np.degrees(fib_table[o]['RA'])
                 flux_hdu.header['DEC'] = np.degrees(fib_table[o]['DEC'])
                 flux_hdu.header['V_BARY'] = bcorr[o]
@@ -992,7 +992,7 @@ class HERMES():
             p_tramline[i,:] += delta_p
         np.savetxt(self.rdir + 'tramlines_p' + header['SOURCE'][6] + '.txt', p_tramline, fmt='%.5e')
         
-    def reduce_field(self,obj_files, arc_file, flat_file, is_std=False):
+    def reduce_field(self,obj_files, arc_file, flat_file, is_std=False, cobfile=[]):
         """A wrapper to completely reduce a field, assuming that a bias already exists."""
         self.fit_tramlines(flat_file)
         fibre_flat = self.create_fibre_flat(flat_file)
@@ -1002,7 +1002,7 @@ class HERMES():
         flux, sigma = self.extract(obj_files, cube=cube, badpix=badpix)
         if not is_std:
             flux, sigma = self.sky_subtract(obj_files, flux, sigma, wavelengths, fibre_flat=fibre_flat)
-        comb_flux, comb_flux_sigma = self.combine_single_epoch_spectra(flux, sigma, wavelengths, infiles=obj_files, is_std=is_std)
+        comb_flux, comb_flux_sigma = self.combine_single_epoch_spectra(flux, sigma, wavelengths, infiles=obj_files, is_std=is_std,cobfile=cobfile)
         return comb_flux, comb_flux_sigma
         
     def go(self, min_obj_files=2, dobias=True, skip_done=False):
@@ -1091,6 +1091,7 @@ class HERMES():
                 cfg_arcs = arcs[np.where( (arcs >= cfg_start) & (arcs < cfg_end))[0]]
             ww = np.where( (objects >= cfg_start) & (objects < cfg_end))[0]
             cfg_objects = objects[ww]
+            cob = pyfits.getheader(self.ddir + all_files[cfg_start])['RUN']
             if len(cfg_flats) == 0:
                 print("No flat for field: " + cfgs[cfg_start] + " Continuing to next field...")
             elif len(cfg_arcs) == 0:
@@ -1105,9 +1106,9 @@ class HERMES():
                         if header['NRUNS'] == len(cfg_objects):
                             print("Ignoring processed field: " + comb_filename)
                             continue
-                print("Processing field: " + cfgs[cfg_start])
+                print("Processing field: " + cfgs[cfg_start], 'COB=' + str(cob))
                 #!!! NB if there is more than 1 arc or flat, we could be more sophisticated here... 
-                self.reduce_field(all_files[cfg_objects], all_files[cfg_arcs[0]], all_files[cfg_flats[0]], is_std = cfg_is_std)
+                self.reduce_field(all_files[cfg_objects],all_files[cfg_arcs[0]], all_files[cfg_flats[0]], is_std = cfg_is_std,cobfile=all_files[cfg_start])
         
 # !!! The "once-off" codes below here could maybe be their own module???
         
