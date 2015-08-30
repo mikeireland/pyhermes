@@ -1504,7 +1504,7 @@ class HERMES():
         #Whoa! That was tricky. Now lets use our PSF to fit for the arc lines.
         dx        = np.zeros((nslitlets*nfibres,narc))
         weight_dx = np.zeros((nslitlets*nfibres,narc))
-        for count in range(0,3):
+        for count in range(0,3): 
             wavelengths = self.find_wavelengths(poly2dfit, fibre_fits, nx)
             #Find the arc_x values...
             #Dispersion in the conventional sense, i.e. dlambda/dx
@@ -1576,15 +1576,15 @@ class HERMES():
             #That was easier than I thought it would be! Next, we have to do the linear fit to the
             #dwave values
             W = np.diag(weight_dx.flatten())
-            y = dwave.flatten()
             
             #So the model here is:
             #delta_wavelengths = arcline_matrix . delta_p
             delta_p = np.linalg.solve(np.dot(np.transpose(arcline_matrix),np.dot(W,arcline_matrix)) ,\
-                np.dot(np.transpose(arcline_matrix),np.dot(W,y)) )
+                np.dot(np.transpose(arcline_matrix),np.dot(W,dwave)) )
             poly2dfit -= delta_p[0:npoly_p]
             fibre_fits[:,0] -= delta_p[npoly_p:npoly_p + nfibres*nslitlets]
             fibre_fits[:,1] -= delta_p[npoly_p + nfibres*nslitlets:]
+#        pdb.set_trace() #!!! XXX
         #Finally, go through the slitlets and fix the fibre fits for low SNR arcs (e.g. dead fibres)
         med_weight = med_weight.reshape((nslitlets,nfibres))
         fibre_fits = fibre_fits.reshape((nslitlets,nfibres,2))
