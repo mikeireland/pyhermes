@@ -723,8 +723,8 @@ class HERMES():
                 field_directory = header['CFG_FILE'][ix0+1:ix1]
             else:
                 field_directory = cfg.replace('.sds','')
-            if not os.path.exists(self.gdir + field_directory):
-                os.makedirs(self.gdir + field_directory)
+            if not os.path.exists(self.gdir + '/' + field_directory):
+                os.makedirs(self.gdir + '/' + field_directory)
             
             #The header and fiber table of the first input file is retained, with
             #key parameters averaged from each header 
@@ -792,7 +792,7 @@ class HERMES():
                 hl = pyfits.HDUList()
                 hl.append(flux_hdu)
                 hl.append(sig_hdu)
-                hl.writeto(self.gdir + field_directory +'/' + filename, clobber=True)
+                hl.writeto(self.gdir + '/' + field_directory +'/' + filename, clobber=True)
                 f_csvfile.write('{0:s},{1:d},{2:d},{3:d},{4:d},{5:s},{6:6.1f},{7:5.2f},{8:s},{9:s}\n'.format(
                     data_date,runs[start], runs[end], o+1, -1, header['STD_NAME'].replace(' ',''),
                     np.median(flux_comb[o,:]/flux_comb_sigma[o,:]), self.release,outfile,analysis_date))
@@ -832,7 +832,7 @@ class HERMES():
                 hl = pyfits.HDUList()
                 hl.append(flux_hdu)
                 hl.append(sig_hdu)
-                hl.writeto(self.gdir + field_directory +'/' + filename, clobber=True)
+                hl.writeto(self.gdir + '/' + field_directory +'/' + filename, clobber=True)
             f_csvfile.close()
                         
         return flux_comb, flux_comb_sigma

@@ -55,4 +55,28 @@ The calibration directory has a list of Thorium and Xenon lines (same format as 
 * dispwave_p0.txt and dispwave_p1.txt: Dispersion and central wavelengths for each fibre.
 * poly2d_p0.txt and poly2d_p1.txt: 2-dimensional polynomial coefficents for higher-order terms in the wavelength solution.
 
+Extraction
+==========
 
+Extraction is column-based, with each fiber extracted based on a model PSF
+:math:`\phi(y)`,
+and the standard formula for weighted mean (e.g. Sharp and Birchall 2010) used:
+
+.. math:: n_k = \Sigma_i ( \frac{D_i \phi_{ik}}{\sigma_i^2} ) / \Sigma_i ( \frac{\phi_{ik}^2}{\sigma_i^2} )
+
+Rather than computing :math:`\sigma^2_i` for each pixel, a single SNR value is targeted, with:
+
+.. math:: \sigma_i^2 \approx \phi_i + \alpha
+
+Fitting
+=======
+
+The model is written down in a matrix form, with:
+
+.. math:: y_i = \Sigma X_{ik} P_{i}
+
+Here :math:`P_{ik}` is a matrix of polynomial coefficients. At each iteration, 
+pixel offsets :math:`\Delta y_i` are computed via a weighted centroid, and the polynomial
+coefficients are updated by solving:
+
+.. math:: \Delta y_i = \Sigma X_{ik} \Delta P_{i}

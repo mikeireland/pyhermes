@@ -16,6 +16,12 @@
 # fit done by hand is better than 0.02 angstroms, and automatic fits 
 # achieve between 0.02 and 0.05 angstroms (better statistics later). 
 #
+# Better (?) References:
+# http://astronomy.swin.edu.au/~mmurphy/thar/
+# http://astronomy.swin.edu.au/~mmurphy/thar/thar_MM201006.dat
+# http://physics.nist.gov/PhysRefData/Handbook/Tables/xenontable2.htm
+# http://pysalt.salt.ac.za/lineatlas/Xe.txt
+# Hancock: QC453.S813
 # ==================================================================
 # ===================
 # BLUE CHANNEL LINES
